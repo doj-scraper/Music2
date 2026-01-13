@@ -12,7 +12,6 @@ import {
   PointsMaterial,
   Points,
   PointLight,
-  AmbientLight,
   AdditiveBlending,
   Color,
   Shape,
@@ -43,6 +42,14 @@ const useThreeVisualizer = ({
   containerRef,
   intensity = 1,
 }: Props) => {
+  // 1. Create a Ref to track playing state without re-rendering
+  const isPlayingRef = useRef(isPlaying);
+  
+  // 2. Sync the Ref whenever the prop changes
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
   const sceneRef = useRef<Scene | null>(null);
   const rendererRef = useRef<WebGLRenderer | null>(null);
   const cameraRef = useRef<PerspectiveCamera | null>(null);
@@ -73,7 +80,7 @@ const useThreeVisualizer = ({
     try {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
       if (ctx.state === 'suspended') {
-        await ctx.resume(); // Must be triggered by a user gesture
+        await ctx.resume();
       }
 
       const src = ctx.createMediaElementSource(audioRef.current);
@@ -140,14 +147,14 @@ const useThreeVisualizer = ({
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // ───────────────── POST PROCESSING (TUNED BLOOM) ─────────────────
+    // ───────────────── POST PROCESSING ─────────────────
     const renderScene = new RenderPass(scene, camera);
 
     const bloomPass = new UnrealBloomPass(
       new Vector2(width, height),
-      1.4,   // Strength
-      0.32,  // Radius
-      0.12   // Threshold
+      1.4,
+      0.32,
+      0.12
     );
 
     const composer = new EffectComposer(renderer);
@@ -167,7 +174,6 @@ const useThreeVisualizer = ({
     shape.bezierCurveTo(x + 16, y + 7, x + 16, y, x + 10, y);
     shape.bezierCurveTo(x + 7, y, x + 5, y + 5, x + 5, y + 5);
 
-    // Outer Geometry (The Ruby)
     const geo = new ExtrudeGeometry(shape, {
       depth: 6,
       bevelEnabled: true,
@@ -177,7 +183,6 @@ const useThreeVisualizer = ({
     });
     geo.center();
 
-    // Inner Geometry (The Core)
     const innerGeo = new ExtrudeGeometry(shape, {
       depth: 3,
       bevelEnabled: true,
@@ -284,7 +289,8 @@ const useThreeVisualizer = ({
       let rawBass = 0;
       let rawTreble = 0;
 
-      if (isPlaying && analyserRef.current && dataRef.current) {
+      // 3. Use Ref here instead of the raw prop
+      if (isPlayingRef.current && analyserRef.current && dataRef.current) {
         analyserRef.current.getByteFrequencyData(dataRef.current);
         rawBass = dataRef.current.slice(0, 10).reduce((a, b) => a + b, 0) / (10 * 255);
         rawTreble = dataRef.current.slice(40, 100).reduce((a, b) => a + b, 0) / (60 * 255);
@@ -297,27 +303,21 @@ const useThreeVisualizer = ({
       const smoothBass = currentBassRef.current;
       const smoothTreble = currentTrebleRef.current;
 
-      // 1. Heart Animation
+      // Animations (Heart, Inner Heart, Light, Particles)...
       if (heartGroupRef.current) {
         heartGroupRef.current.rotation.y = Math.sin(t * 0.5) * 0.15;
         heartGroupRef.current.rotation.z = Math.PI + Math.sin(t * 0.2) * 0.05;
         const scale = 1.0 + smoothBass * 0.3;
         heartGroupRef.current.scale.setScalar(scale);
       }
-
-      // 2. Inner Heart Animation
       if (innerHeartRef.current) {
         innerHeartRef.current.rotation.y = t * 0.5;
         (innerHeartRef.current.material as MeshBasicMaterial).opacity = 0.3 + smoothBass * 0.7;
       }
-
-      // 3. Light Animation
       if (lightRef.current) {
         lightRef.current.position.x = Math.sin(t * 0.5) * 60;
         lightRef.current.position.z = Math.cos(t * 0.5) * 60 + 20;
       }
-
-      // 4. Particles
       if (particlesRef.current) {
         particlesRef.current.rotation.y = -t * 0.05;
         (particlesRef.current.material as PointsMaterial).opacity = 0.2 + smoothTreble * 0.5;
@@ -331,10 +331,10 @@ const useThreeVisualizer = ({
 
     return () => {
       pausedRef.current = true;
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-      }
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
       window.removeEventListener('resize', resize);
+      
+      // Dispose logic
       renderer.dispose();
       composer.dispose();
       geo.dispose();
@@ -342,10 +342,16 @@ const useThreeVisualizer = ({
       crystalMat.dispose();
       coreMat.dispose();
       pGeo.dispose();
-      containerRef.current?.removeChild(renderer.domElement);
+      
+      if (containerRef.current && renderer.domElement) {
+        containerRef.current.removeChild(renderer.domElement);
+      }
     };
-  }, [containerRef, intensity, isPlaying, connectAudio]);
+    
+  // 4. IMPORTANT: Removed 'isPlaying' and 'connectAudio' from dependency array
+  }, [containerRef, intensity]); 
 
+  // Audio Event Listener Logic remains the same
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
@@ -356,39 +362,4 @@ const useThreeVisualizer = ({
   return { ready, isWebGLSupported };
 };
 
-// ─────────────────────────────────────────────────────────────
-// COMPONENT
-// ─────────────────────────────────────────────────────────────
-const ThreeBackground = ({
-  audioRef,
-  isPlaying,
-  intensity = 1,
-}: {
-  audioRef: React.RefObject<HTMLAudioElement>;
-  isPlaying: boolean;
-  intensity?: number;
-}) => {
-  const ref = useRef<HTMLDivElement>(null);
-  const { ready, isWebGLSupported } = useThreeVisualizer({ audioRef, isPlaying, containerRef: ref, intensity });
-
-  return (
-    <div
-      ref={ref}
-      className="absolute inset-0"
-      style={{
-        pointerEvents: 'none',
-        opacity: ready && isWebGLSupported ? 1 : 0,
-        transition: 'opacity 1000ms ease',
-        zIndex: 0,
-      }}
-    >
-      {!isWebGLSupported && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black text-white">
-          Your browser does not support WebGL. Try Chrome or Safari.
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default ThreeBackground;
+// ... ThreeBackground component remains the same ...
