@@ -9,7 +9,7 @@ interface ThreeBackgroundProps {
 const ThreeBackground: React.FC<ThreeBackgroundProps> = ({ audioRef, isPlaying }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   
-  // Refs for Animation State (prevents re-renders)
+  // Refs for Animation State
   const isPlayingRef = useRef(isPlaying);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataArrayRef = useRef<Uint8Array | null>(null);
@@ -26,7 +26,7 @@ const ThreeBackground: React.FC<ThreeBackgroundProps> = ({ audioRef, isPlaying }
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
-  // 2. BUILD SCENE (Runs ONCE on mount)
+  // 2. BUILD SCENE
   useEffect(() => {
     if (!mountRef.current) return;
 
@@ -48,7 +48,7 @@ const ThreeBackground: React.FC<ThreeBackgroundProps> = ({ audioRef, isPlaying }
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(0x000000, 0);
     
-    // CSS Force to Background
+    // CSS Force
     renderer.domElement.style.position = 'absolute';
     renderer.domElement.style.top = '0';
     renderer.domElement.style.left = '0';
@@ -58,19 +58,19 @@ const ThreeBackground: React.FC<ThreeBackgroundProps> = ({ audioRef, isPlaying }
     mountRef.current.appendChild(renderer.domElement);
 
     // --- LIGHTS ---
-    // 1. Warm Gold Light (Main)
+    // Warm Gold Light
     const pointLight1 = new THREE.PointLight(0xFFD700, 2, 150); 
     pointLight1.position.set(50, 50, 50);
     scene.add(pointLight1);
     light1Ref.current = pointLight1;
 
-    // 2. Red Rim Light (Contrast)
-    const pointLight2 = new THREE.PointLight(0xff0000, 1.5, 150);
+    // Cyan/Red contrast light
+    const pointLight2 = new THREE.PointLight(0x00ffff, 1.5, 150);
     pointLight2.position.set(-50, -50, 50);
     scene.add(pointLight2);
     light2Ref.current = pointLight2;
 
-    scene.add(new THREE.AmbientLight(0x442222, 0.5)); // Dark warm ambient
+    scene.add(new THREE.AmbientLight(0x442222, 0.5));
 
     // --- GEOMETRY: SINGLE HEART ---
     const createHeartShape = () => {
@@ -97,13 +97,12 @@ const ThreeBackground: React.FC<ThreeBackgroundProps> = ({ audioRef, isPlaying }
     
     const heartGeo = new THREE.ExtrudeGeometry(heartShape, extrudeSettings);
     
-    // Center geometry around origin
+    // Center geometry
     heartGeo.computeBoundingBox();
     const xMid = -0.5 * (heartGeo.boundingBox!.max.x - heartGeo.boundingBox!.min.x);
     heartGeo.translate(xMid, 0, 0);
 
-    // MATERIALS
-    // 1. Gold Wireframe (Outline)
+    // MATERIALS (Red & Gold)
     const wireGeo = new THREE.WireframeGeometry(heartGeo);
     const wireMat = new THREE.LineBasicMaterial({
       color: 0xFFD700, // Bright Gold
@@ -113,54 +112,58 @@ const ThreeBackground: React.FC<ThreeBackgroundProps> = ({ audioRef, isPlaying }
     });
     const wireMesh = new THREE.LineSegments(wireGeo, wireMat);
 
-    // 2. Deep Red Fill (Inner Body)
     const fillMat = new THREE.MeshPhongMaterial({
-      color: 0x880000,       // Deep Red Base
-      emissive: 0x330000,    // Subtle Red Glow
+      color: 0x880000,       // Deep Red
+      emissive: 0x330000,    // Red Glow
       specular: 0xFFD700,    // Gold Highlights
       shininess: 60,
       transparent: true,
-      opacity: 0.4,          // Semi-transparent
+      opacity: 0.4,
       side: THREE.DoubleSide
     });
     const fillMesh = new THREE.Mesh(heartGeo, fillMat);
 
-    // GROUP (Holds both fill and wire)
+    // GROUP
     const heartGroup = new THREE.Group();
     heartGroup.add(fillMesh);
     heartGroup.add(wireMesh);
 
     // TRANSFORMATIONS
-    // 1. Flip it upright (Math.PI on Z axis)
-    heartGroup.rotation.z = Math.PI;
-    // 2. Position Lower (Behind controls)
-    heartGroup.position.y = -15; 
+    heartGroup.rotation.z = Math.PI; // Flip upright
+    heartGroup.position.y = -15;     // Lower position
     
     scene.add(heartGroup);
     heartGroupRef.current = heartGroup;
 
-    // --- PARTICLES (Gold & Red Dust) ---
+    // --- PARTICLES (RESTORED: Blue & Red) ---
     const pCount = 1500;
     const pPos = new Float32Array(pCount * 3);
     const pCol = new Float32Array(pCount * 3);
     for (let i = 0; i < pCount; i++) {
       const i3 = i * 3;
+      // Position
       pPos[i3] = (Math.random() - 0.5) * 250;
       pPos[i3 + 1] = (Math.random() - 0.5) * 250;
       pPos[i3 + 2] = (Math.random() - 0.5) * 150;
       
-      // Mix of Gold and Red particles
-      const isGold = Math.random() > 0.4;
-      if (isGold) {
-        pCol[i3] = 1.0; pCol[i3+1] = 0.8; pCol[i3+2] = 0.0; // Gold
+      // COLOR SELECTION (Reverted to Blue/Red mix)
+      const colorChoice = Math.random();
+      if (colorChoice < 0.5) {
+        // Cyan/Blue-ish
+        pCol[i3] = 0.0; // R
+        pCol[i3 + 1] = 0.8 + Math.random() * 0.2; // G (varies slightly)
+        pCol[i3 + 2] = 1.0; // B (Blue)
       } else {
-        pCol[i3] = 0.9; pCol[i3+1] = 0.1; pCol[i3+2] = 0.1; // Red
+        // Red/Magenta-ish
+        pCol[i3] = 1.0; // R (Red)
+        pCol[i3 + 1] = 0.2 + Math.random() * 0.3; // G (varies slightly)
+        pCol[i3 + 2] = 0.2; // B
       }
     }
     const pGeo = new THREE.BufferGeometry();
     pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
     pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
-    const pMat = new THREE.PointsMaterial({ size: 1.0, vertexColors: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending });
+    const pMat = new THREE.PointsMaterial({ size: 1.0, vertexColors: true, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending });
     const particles = new THREE.Points(pGeo, pMat);
     scene.add(particles);
     particlesRef.current = particles;
@@ -199,33 +202,27 @@ const ThreeBackground: React.FC<ThreeBackgroundProps> = ({ audioRef, isPlaying }
       let bass = 0;
       if (isPlayingRef.current && analyserRef.current && dataArrayRef.current) {
         analyserRef.current.getByteFrequencyData(dataArrayRef.current);
-        // Grab lower frequencies for the "beat"
         let bassSum = 0;
         for (let i = 0; i < 15; i++) {
           bassSum += dataArrayRef.current[i];
         }
-        bass = bassSum / 15 / 255; // Normalize 0-1
+        bass = bassSum / 15 / 255;
       }
 
       // HEART ANIMATION
       if (heartGroupRef.current) {
-        // 1. Slow Idle Rotation
         heartGroupRef.current.rotation.y = Math.sin(time * 0.5) * 0.2; 
-        
-        // 2. Beat Scale (Base scale 1.5 + bass boost)
         const targetScale = 1.5 + (bass * 0.4); 
         heartGroupRef.current.scale.set(targetScale, targetScale, targetScale);
-        
-        // 3. Keep orientation correct (flipped Z) + slight Z-wobble
         heartGroupRef.current.rotation.z = Math.PI + (Math.sin(time * 0.2) * 0.05);
       }
 
-      // PARTICLES (Slow Drift)
+      // PARTICLES
       if (particlesRef.current) {
         particlesRef.current.rotation.y = time * 0.1;
       }
 
-      // LIGHTS (Move around)
+      // LIGHTS
       if (light1Ref.current) {
         light1Ref.current.position.x = Math.sin(time) * 60;
         light1Ref.current.position.z = Math.cos(time) * 60;
