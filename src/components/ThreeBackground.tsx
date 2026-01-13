@@ -5,7 +5,6 @@ import {
   WebGLRenderer,
   FogExp2,
   ExtrudeGeometry,
-  MeshPhysicalMaterial,
   Mesh,
   BufferGeometry,
   BufferAttribute,
@@ -42,10 +41,9 @@ const useThreeVisualizer = ({
   containerRef,
   intensity = 1,
 }: Props) => {
-  // 1. Create a Ref to track playing state without re-rendering
+  // Ref to track playing state without re-rendering scene
   const isPlayingRef = useRef(isPlaying);
   
-  // 2. Sync the Ref whenever the prop changes
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
@@ -61,7 +59,9 @@ const useThreeVisualizer = ({
   const pausedRef = useRef(false);
 
   // Objects
+  // heartGroupRef will now point to the wireframe mesh for general rotation/scale
   const heartGroupRef = useRef<Mesh | null>(null);
+  // innerHeartRef will also point to the wireframe mesh for specific opacity animation
   const innerHeartRef = useRef<Mesh | null>(null);
   const particlesRef = useRef<Points | null>(null);
   const lightRef = useRef<PointLight | null>(null);
@@ -104,7 +104,6 @@ const useThreeVisualizer = ({
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Check for WebGL support
     try {
       const canvas = document.createElement('canvas');
       const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
@@ -149,14 +148,13 @@ const useThreeVisualizer = ({
 
     // ───────────────── POST PROCESSING ─────────────────
     const renderScene = new RenderPass(scene, camera);
-
+    // Increased bloom strength slightly since the main object is removed
     const bloomPass = new UnrealBloomPass(
       new Vector2(width, height),
-      1.4,
+      1.6, // Strength
       0.32,
-      0.12
+      0.1
     );
-
     const composer = new EffectComposer(renderer);
     composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     composer.addPass(renderScene);
@@ -174,14 +172,7 @@ const useThreeVisualizer = ({
     shape.bezierCurveTo(x + 16, y + 7, x + 16, y, x + 10, y);
     shape.bezierCurveTo(x + 7, y, x + 5, y + 5, x + 5, y + 5);
 
-    const geo = new ExtrudeGeometry(shape, {
-      depth: 6,
-      bevelEnabled: true,
-      bevelThickness: 1,
-      bevelSize: 1,
-      bevelSegments: 8,
-    });
-    geo.center();
+    // Removed outer geometry creation (geo)
 
     const innerGeo = new ExtrudeGeometry(shape, {
       depth: 3,
@@ -193,19 +184,7 @@ const useThreeVisualizer = ({
     innerGeo.center();
 
     // ───────────────── MATERIALS ─────────────────
-    const crystalMat = new MeshPhysicalMaterial({
-      color: 0xff002b,
-      emissive: 0x500000,
-      roughness: 0.1,
-      metalness: 0.1,
-      transmission: 0.9,
-      thickness: 8.0,
-      ior: 1.76,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.0,
-      attenuationColor: new Color(0x8a0b1f),
-      attenuationDistance: 20,
-    });
+    // Removed crystalMat (red material)
 
     const coreMat = new MeshBasicMaterial({
       color: 0xff88aa,
@@ -215,33 +194,49 @@ const useThreeVisualizer = ({
       blending: AdditiveBlending
     });
 
-    // ───────────────── MESHES ─────────────────
-    const heart = new Mesh(geo, crystalMat);
-    heart.rotation.z = Math.PI;
-    heart.position.y = -35;
-    scene.add(heart);
-    heartGroupRef.current = heart;
+    // ───────────────── MESHES (WIREFRAME ONLY) ─────────────────
+    // Removed the outer 'heart' mesh creation
 
     const innerHeart = new Mesh(innerGeo, coreMat);
-    innerHeart.rotation.z = Math.PI;
-    innerHeart.position.z = 0;
-    innerHeart.scale.setScalar(0.7);
-    heart.add(innerHeart);
+    // Position it lower, similar to where the parent object was
+    innerHeart.position.y = -35; 
+    innerHeart.scale.setScalar(0.8); // Slightly larger scale for the standalone wireframe
+
+    // Add directly to scene instead of attaching to parent
+    scene.add(innerHeart);
+    
+    // Point refs to this single mesh so animations apply to it
+    heartGroupRef.current = innerHeart; 
     innerHeartRef.current = innerHeart;
 
-    // ───────────────── PARTICLES ─────────────────
+    // ───────────────── PARTICLES (Keep Pink/Blue) ─────────────────
     const count = 1000;
     const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3); 
+
+    const colorA = new Color(0xff0077); // Hot Pink
+    const colorB = new Color(0x0099ff); // Cyan Blue
+    const tempColor = new Color();
+
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
       positions[i3] = (Math.random() - 0.5) * 300;
       positions[i3 + 1] = (Math.random() - 0.5) * 200;
       positions[i3 + 2] = (Math.random() - 0.5) * 200;
+
+      const mixed = Math.random();
+      tempColor.lerpColors(colorA, colorB, mixed);
+      colors[i3] = tempColor.r;
+      colors[i3 + 1] = tempColor.g;
+      colors[i3 + 2] = tempColor.b;
     }
+    
     const pGeo = new BufferGeometry();
     pGeo.setAttribute('position', new BufferAttribute(positions, 3));
+    pGeo.setAttribute('color', new BufferAttribute(colors, 3)); 
+
     const pMat = new PointsMaterial({
-      color: 0xff4d6d,
+      vertexColors: true, 
       size: 0.75,
       transparent: true,
       opacity: 0.6,
@@ -289,7 +284,7 @@ const useThreeVisualizer = ({
       let rawBass = 0;
       let rawTreble = 0;
 
-      // Use Ref here instead of the raw prop to avoid re-render
+      // Use Ref here instead of the raw prop
       if (isPlayingRef.current && analyserRef.current && dataRef.current) {
         analyserRef.current.getByteFrequencyData(dataRef.current);
         rawBass = dataRef.current.slice(0, 10).reduce((a, b) => a + b, 0) / (10 * 255);
@@ -304,14 +299,18 @@ const useThreeVisualizer = ({
       const smoothTreble = currentTrebleRef.current;
 
       // Animations
+      // heartGroupRef now points to the wireframe mesh, applying general rotation/scale
       if (heartGroupRef.current) {
         heartGroupRef.current.rotation.y = Math.sin(t * 0.5) * 0.15;
-        heartGroupRef.current.rotation.z = Math.PI + Math.sin(t * 0.2) * 0.05;
-        const scale = 1.0 + smoothBass * 0.3;
+        heartGroupRef.current.rotation.z = Math.sin(t * 0.2) * 0.05;
+        // Adjust base scale since it's alone now
+        const scale = 0.8 + smoothBass * 0.3;
         heartGroupRef.current.scale.setScalar(scale);
       }
+      // innerHeartRef also points to the wireframe mesh, applying opacity pulse
       if (innerHeartRef.current) {
-        innerHeartRef.current.rotation.y = t * 0.5;
+         // Optional: extra rotation on itself if desired, currently commented out as heartGroupRef handles rotation
+         // innerHeartRef.current.rotation.y = t * 0.5;
         (innerHeartRef.current.material as MeshBasicMaterial).opacity = 0.3 + smoothBass * 0.7;
       }
       if (lightRef.current) {
@@ -336,9 +335,9 @@ const useThreeVisualizer = ({
       
       renderer.dispose();
       composer.dispose();
-      geo.dispose();
+      // removed geo.dispose()
       innerGeo.dispose();
-      crystalMat.dispose();
+      // removed crystalMat.dispose()
       coreMat.dispose();
       pGeo.dispose();
       
