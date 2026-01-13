@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Scene,
@@ -8,7 +7,7 @@ import {
   ExtrudeGeometry,
   MeshPhysicalMaterial,
   Mesh,
-  Float32Array,
+  // Float32Array removed (native JS global)
   BufferGeometry,
   BufferAttribute,
   PointsMaterial,
@@ -21,7 +20,7 @@ import {
   Vector2,
   MathUtils,
   MeshBasicMaterial,
-  SRGBColorSpace, // Import for color correctness
+  SRGBColorSpace,
 } from 'three';
 
 // POST PROCESSING IMPORTS
@@ -105,7 +104,7 @@ const useThreeVisualizer = ({
     // 2. Renderer Tuning
     const renderer = new WebGLRenderer({
       alpha: true,
-      antialias: false, // Post-processing handles this mostly
+      antialias: false, 
       powerPreference: 'high-performance',
       stencil: false,
     });
@@ -113,9 +112,8 @@ const useThreeVisualizer = ({
     renderer.setClearColor(0x000000, 0);
     renderer.setClearAlpha(0);
     
-    // Color Space & Lighting upgrades
+    // Color Space
     renderer.outputColorSpace = SRGBColorSpace; 
-    // renderer.physicallyCorrectLights = true; // Note: Deprecated in newer Three.js versions for useLegacyLights = false
 
     renderer.domElement.style.position = 'absolute';
     renderer.domElement.style.inset = '0';
@@ -125,16 +123,14 @@ const useThreeVisualizer = ({
     // ───────────────── POST PROCESSING (TUNED BLOOM) ─────────────────
     const renderScene = new RenderPass(scene, camera);
     
-    // TUNING: Tighter radius, slightly higher threshold
     const bloomPass = new UnrealBloomPass(
       new Vector2(window.innerWidth, window.innerHeight),
-      1.4,   // Strength (Punch)
-      0.32,  // Radius (Tighter halo, better perf)
-      0.12   // Threshold (Cleaner edges)
+      1.4,   // Strength
+      0.32,  // Radius
+      0.12   // Threshold
     );
 
     const composer = new EffectComposer(renderer);
-    // TUNING: Cap pixel ratio to 1.5 for massive mobile win
     composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     composer.addPass(renderScene);
     composer.addPass(bloomPass);
@@ -157,7 +153,7 @@ const useThreeVisualizer = ({
       bevelEnabled: true,
       bevelThickness: 1,
       bevelSize: 1,
-      bevelSegments: 8, // Reduced from 12 (Invisible savings)
+      bevelSegments: 8,
     });
     geo.center();
 
@@ -167,7 +163,7 @@ const useThreeVisualizer = ({
       bevelEnabled: true,
       bevelThickness: 0.5,
       bevelSize: 0.5,
-      bevelSegments: 3, // Reduced from 4
+      bevelSegments: 3,
     });
     innerGeo.center();
 
@@ -212,7 +208,8 @@ const useThreeVisualizer = ({
     innerHeartRef.current = innerHeart;
 
     // ───────────────── PARTICLES (OPTIMIZED) ─────────────────
-    const count = 1000; // Reduced from 1200 (~15% savings)
+    const count = 1000;
+    // Float32Array is used here natively
     const positions = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
@@ -224,7 +221,7 @@ const useThreeVisualizer = ({
     pGeo.setAttribute('position', new BufferAttribute(positions, 3));
     const pMat = new PointsMaterial({
       color: 0xff4d6d,
-      size: 0.75, // Slightly smaller/tighter
+      size: 0.75,
       transparent: true,
       opacity: 0.6,
       blending: AdditiveBlending,
@@ -372,4 +369,3 @@ const ThreeBackground = ({
 };
 
 export default ThreeBackground;
-
