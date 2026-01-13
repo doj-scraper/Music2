@@ -289,7 +289,7 @@ const useThreeVisualizer = ({
       let rawBass = 0;
       let rawTreble = 0;
 
-      // 3. Use Ref here instead of the raw prop
+      // Use Ref here instead of the raw prop to avoid re-render
       if (isPlayingRef.current && analyserRef.current && dataRef.current) {
         analyserRef.current.getByteFrequencyData(dataRef.current);
         rawBass = dataRef.current.slice(0, 10).reduce((a, b) => a + b, 0) / (10 * 255);
@@ -303,7 +303,7 @@ const useThreeVisualizer = ({
       const smoothBass = currentBassRef.current;
       const smoothTreble = currentTrebleRef.current;
 
-      // Animations (Heart, Inner Heart, Light, Particles)...
+      // Animations
       if (heartGroupRef.current) {
         heartGroupRef.current.rotation.y = Math.sin(t * 0.5) * 0.15;
         heartGroupRef.current.rotation.z = Math.PI + Math.sin(t * 0.2) * 0.05;
@@ -334,7 +334,6 @@ const useThreeVisualizer = ({
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       window.removeEventListener('resize', resize);
       
-      // Dispose logic
       renderer.dispose();
       composer.dispose();
       geo.dispose();
@@ -348,10 +347,9 @@ const useThreeVisualizer = ({
       }
     };
     
-  // 4. IMPORTANT: Removed 'isPlaying' and 'connectAudio' from dependency array
   }, [containerRef, intensity]); 
 
-  // Audio Event Listener Logic remains the same
+  // Audio Event Listener
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
@@ -362,4 +360,39 @@ const useThreeVisualizer = ({
   return { ready, isWebGLSupported };
 };
 
-// ... ThreeBackground component remains the same ...
+// ─────────────────────────────────────────────────────────────
+// COMPONENT
+// ─────────────────────────────────────────────────────────────
+const ThreeBackground = ({
+  audioRef,
+  isPlaying,
+  intensity = 1,
+}: {
+  audioRef: React.RefObject<HTMLAudioElement>;
+  isPlaying: boolean;
+  intensity?: number;
+}) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const { ready, isWebGLSupported } = useThreeVisualizer({ audioRef, isPlaying, containerRef: ref, intensity });
+
+  return (
+    <div
+      ref={ref}
+      className="absolute inset-0"
+      style={{
+        pointerEvents: 'none',
+        opacity: ready && isWebGLSupported ? 1 : 0,
+        transition: 'opacity 1000ms ease',
+        zIndex: 0,
+      }}
+    >
+      {!isWebGLSupported && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black text-white">
+          Your browser does not support WebGL. Try Chrome or Safari.
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ThreeBackground;
