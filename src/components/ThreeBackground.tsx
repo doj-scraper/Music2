@@ -1,10 +1,4 @@
-This is the "Tuning Pass." We are stripping the fat, sharpening the edges, and locking in that synthetic, high-performance feel.
-Here are the specific changes applied:
- * Bloom Containment: Radius tightened to 0.32, Threshold raised to 0.12. The glow is now a halo, not a fog.
- * Geometry Optimization: Outer bevels reduced to 8, Inner to 3. Invisible to the eye, lighter on the GPU.
- * Particle Discipline: Count dropped to 1000, size tightened to 0.75.
- * Render Precision: Added SRGBColorSpace for accurate tone mapping and capped the Composer pixel ratio to 1.5 for a massive mobile performance win.
-<!-- end list -->
+
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Scene,
