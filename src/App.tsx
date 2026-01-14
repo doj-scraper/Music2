@@ -16,7 +16,7 @@ import ThreeBackground from './components/ThreeBackground';
 import { TrackInfo } from './types/types';
 
 const TRACK: TrackInfo = {
-  title: "MY WAY",
+  title: "sedate/seduct",
   artist: "MAKENA",
   format: "PCM / WAVE",
   bitrate: "1411 KBPS",
