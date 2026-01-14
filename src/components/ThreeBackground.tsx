@@ -5,15 +5,12 @@ import {
   WebGLRenderer,
   FogExp2,
   ExtrudeGeometry,
-  MeshPhysicalMaterial,
   Mesh,
-  // Float32Array removed (native JS global)
   BufferGeometry,
   BufferAttribute,
   PointsMaterial,
   Points,
   PointLight,
-  AmbientLight,
   AdditiveBlending,
   Color,
   Shape,
@@ -21,6 +18,7 @@ import {
   MathUtils,
   MeshBasicMaterial,
   SRGBColorSpace,
+  Group,
 } from 'three';
 
 // POST PROCESSING IMPORTS
@@ -44,11 +42,18 @@ const useThreeVisualizer = ({
   containerRef,
   intensity = 1,
 }: Props) => {
+  // Ref to track playing state without re-rendering scene
+  const isPlayingRef = useRef(isPlaying);
+  
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
   const sceneRef = useRef<Scene | null>(null);
   const rendererRef = useRef<WebGLRenderer | null>(null);
   const cameraRef = useRef<PerspectiveCamera | null>(null);
   const composerRef = useRef<EffectComposer | null>(null);
-  
+
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataRef = useRef<Uint8Array | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -59,31 +64,38 @@ const useThreeVisualizer = ({
   const innerHeartRef = useRef<Mesh | null>(null);
   const particlesRef = useRef<Points | null>(null);
   const lightRef = useRef<PointLight | null>(null);
+  const orbitingParticlesRef = useRef<Points | null>(null);
 
   // Smooth Animation Values
   const currentBassRef = useRef(0);
   const currentTrebleRef = useRef(0);
 
   const [ready, setReady] = useState(false);
+  const [isWebGLSupported, setIsWebGLSupported] = useState(true);
 
   // ── AUDIO SETUP ──
   const connectAudio = useCallback(async () => {
     if (!audioRef.current || analyserRef.current) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    if (ctx.state === 'suspended') await ctx.resume();
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
 
-    const src = ctx.createMediaElementSource(audioRef.current);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.8;
+      const src = ctx.createMediaElementSource(audioRef.current);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.8;
 
-    src.connect(analyser);
-    analyser.connect(ctx.destination);
+      src.connect(analyser);
+      analyser.connect(ctx.destination);
 
-    analyserRef.current = analyser;
-    dataRef.current = new Uint8Array(analyser.frequencyBinCount);
+      analyserRef.current = analyser;
+      dataRef.current = new Uint8Array(analyser.frequencyBinCount);
+    } catch (err) {
+      console.error('Failed to initialize audio context:', err);
+    }
   }, [audioRef]);
 
   // ─────────────────────────────────────────────────────────────
@@ -92,44 +104,56 @@ const useThreeVisualizer = ({
   useEffect(() => {
     if (!containerRef.current) return;
 
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      if (!gl) {
+        setIsWebGLSupported(false);
+        return;
+      }
+    } catch (err) {
+      setIsWebGLSupported(false);
+      return;
+    }
+
+    const { width, height } = containerRef.current.getBoundingClientRect();
+    if (width === 0 || height === 0) return;
+
     // 1. Setup Scene
     const scene = new Scene();
     scene.fog = new FogExp2(0x020202, 0.002);
     sceneRef.current = scene;
 
-    const camera = new PerspectiveCamera(60, 1, 1, 1000);
+    const camera = new PerspectiveCamera(60, width / height, 1, 1000);
     camera.position.z = 110;
     cameraRef.current = camera;
 
     // 2. Renderer Tuning
     const renderer = new WebGLRenderer({
       alpha: true,
-      antialias: false, 
+      antialias: false,
       powerPreference: 'high-performance',
       stencil: false,
+      preserveDrawingBuffer: true,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0x000000, 0);
     renderer.setClearAlpha(0);
-    
-    // Color Space
-    renderer.outputColorSpace = SRGBColorSpace; 
+    renderer.outputColorSpace = SRGBColorSpace;
 
     renderer.domElement.style.position = 'absolute';
     renderer.domElement.style.inset = '0';
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // ───────────────── POST PROCESSING (TUNED BLOOM) ─────────────────
+    // ───────────────── POST PROCESSING ─────────────────
     const renderScene = new RenderPass(scene, camera);
-    
     const bloomPass = new UnrealBloomPass(
-      new Vector2(window.innerWidth, window.innerHeight),
-      1.4,   // Strength
-      0.32,  // Radius
-      0.12   // Threshold
+      new Vector2(width, height),
+      1.6,
+      0.32,
+      0.1
     );
-
     const composer = new EffectComposer(renderer);
     composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     composer.addPass(renderScene);
@@ -147,17 +171,6 @@ const useThreeVisualizer = ({
     shape.bezierCurveTo(x + 16, y + 7, x + 16, y, x + 10, y);
     shape.bezierCurveTo(x + 7, y, x + 5, y + 5, x + 5, y + 5);
 
-    // Outer Geometry (The Ruby) - OPTIMIZED
-    const geo = new ExtrudeGeometry(shape, {
-      depth: 6,
-      bevelEnabled: true,
-      bevelThickness: 1,
-      bevelSize: 1,
-      bevelSegments: 8,
-    });
-    geo.center();
-
-    // Inner Geometry (The Core) - OPTIMIZED
     const innerGeo = new ExtrudeGeometry(shape, {
       depth: 3,
       bevelEnabled: true,
@@ -168,23 +181,6 @@ const useThreeVisualizer = ({
     innerGeo.center();
 
     // ───────────────── MATERIALS ─────────────────
-    
-    // MATERIAL 1: The "Ruby" Outer Shell
-    const crystalMat = new MeshPhysicalMaterial({
-      color: 0xff002b,
-      emissive: 0x500000,
-      roughness: 0.1,
-      metalness: 0.1,
-      transmission: 0.9,
-      thickness: 8.0,
-      ior: 1.76,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.0,
-      attenuationColor: new Color(0x8a0b1f),
-      attenuationDistance: 20,
-    });
-
-    // MATERIAL 2: The "Energy" Inner Core
     const coreMat = new MeshBasicMaterial({
       color: 0xff88aa,
       wireframe: true,
@@ -193,43 +189,97 @@ const useThreeVisualizer = ({
       blending: AdditiveBlending
     });
 
-    // ───────────────── MESHES ─────────────────
-    const heart = new Mesh(geo, crystalMat);
-    heart.rotation.z = Math.PI;
-    heart.position.y = -35;
-    scene.add(heart);
-    heartGroupRef.current = heart;
-
+    // ───────────────── MESHES (WIREFRAME HEART - FLIPPED) ─────────────────
     const innerHeart = new Mesh(innerGeo, coreMat);
-    innerHeart.rotation.z = Math.PI;
-    innerHeart.position.z = 0;
-    innerHeart.scale.setScalar(0.7);
-    heart.add(innerHeart);
+    innerHeart.position.y = -35;
+    innerHeart.scale.setScalar(0.8);
+    // FLIP THE HEART: Rotate 180 degrees on X-axis
+    innerHeart.rotation.x = Math.PI;
+
+    scene.add(innerHeart);
+    
+    heartGroupRef.current = innerHeart; 
     innerHeartRef.current = innerHeart;
 
-    // ───────────────── PARTICLES (OPTIMIZED) ─────────────────
+    // ───────────────── BACKGROUND PARTICLES (BRIGHTER CANDY COLORS) ─────────────────
     const count = 1000;
-    // Float32Array is used here natively
     const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3); 
+
+    // Brighter candy colors
+    const colorA = new Color(0xff3399); // Candy Pink
+    const colorB = new Color(0x33ccff); // Candy Blue
+    const tempColor = new Color();
+
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
       positions[i3] = (Math.random() - 0.5) * 300;
       positions[i3 + 1] = (Math.random() - 0.5) * 200;
       positions[i3 + 2] = (Math.random() - 0.5) * 200;
+
+      const mixed = Math.random();
+      tempColor.lerpColors(colorA, colorB, mixed);
+      colors[i3] = tempColor.r;
+      colors[i3 + 1] = tempColor.g;
+      colors[i3 + 2] = tempColor.b;
     }
+    
     const pGeo = new BufferGeometry();
     pGeo.setAttribute('position', new BufferAttribute(positions, 3));
+    pGeo.setAttribute('color', new BufferAttribute(colors, 3)); 
+
     const pMat = new PointsMaterial({
-      color: 0xff4d6d,
+      vertexColors: true, 
       size: 0.75,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.7, // Increased from 0.6
       blending: AdditiveBlending,
       sizeAttenuation: true,
     });
     const particles = new Points(pGeo, pMat);
     scene.add(particles);
     particlesRef.current = particles;
+
+    // ───────────────── ORBITING PARTICLES AROUND HEART ─────────────────
+    const orbitCount = 30;
+    const orbitRadius = 15;
+    const orbitPositions = new Float32Array(orbitCount * 3);
+    const orbitColors = new Float32Array(orbitCount * 3);
+    
+    const pinkColor = new Color(0xff3399);
+    const blueColor = new Color(0x33ccff);
+    
+    for (let i = 0; i < orbitCount; i++) {
+      const angle = (i / orbitCount) * Math.PI * 2;
+      const i3 = i * 3;
+      
+      orbitPositions[i3] = Math.cos(angle) * orbitRadius;
+      orbitPositions[i3 + 1] = Math.sin(angle) * orbitRadius * 0.6; // Elliptical
+      orbitPositions[i3 + 2] = Math.sin(angle * 2) * 3;
+      
+      const color = i % 2 === 0 ? pinkColor : blueColor;
+      orbitColors[i3] = color.r;
+      orbitColors[i3 + 1] = color.g;
+      orbitColors[i3 + 2] = color.b;
+    }
+    
+    const orbitGeo = new BufferGeometry();
+    orbitGeo.setAttribute('position', new BufferAttribute(orbitPositions, 3));
+    orbitGeo.setAttribute('color', new BufferAttribute(orbitColors, 3));
+    
+    const orbitMat = new PointsMaterial({
+      vertexColors: true,
+      size: 2.0,
+      transparent: true,
+      opacity: 0.9,
+      blending: AdditiveBlending,
+      sizeAttenuation: true,
+    });
+    
+    const orbitParticles = new Points(orbitGeo, orbitMat);
+    orbitParticles.position.y = -35;
+    scene.add(orbitParticles);
+    orbitingParticlesRef.current = orbitParticles;
 
     // ───────────────── LIGHTING ─────────────────
     const key = new PointLight(0xff0f3b, 1.5, 300);
@@ -249,6 +299,7 @@ const useThreeVisualizer = ({
     const resize = () => {
       if (!containerRef.current || !rendererRef.current || !cameraRef.current) return;
       const { width, height } = containerRef.current.getBoundingClientRect();
+      if (width === 0 || height === 0) return;
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
@@ -263,49 +314,48 @@ const useThreeVisualizer = ({
       rafRef.current = requestAnimationFrame(animate);
 
       const t = performance.now() * 0.001;
-      
+
       let rawBass = 0;
       let rawTreble = 0;
 
-      if (isPlaying && analyserRef.current && dataRef.current) {
+      if (isPlayingRef.current && analyserRef.current && dataRef.current) {
         analyserRef.current.getByteFrequencyData(dataRef.current);
         rawBass = dataRef.current.slice(0, 10).reduce((a, b) => a + b, 0) / (10 * 255);
         rawTreble = dataRef.current.slice(40, 100).reduce((a, b) => a + b, 0) / (60 * 255);
       }
 
-      // Smooth Lerping
       currentBassRef.current = MathUtils.lerp(currentBassRef.current, rawBass, 0.1);
       currentTrebleRef.current = MathUtils.lerp(currentTrebleRef.current, rawTreble, 0.05);
 
       const smoothBass = currentBassRef.current;
       const smoothTreble = currentTrebleRef.current;
 
-      // 1. Heart Animation
+      // Heart animations
       if (heartGroupRef.current) {
         heartGroupRef.current.rotation.y = Math.sin(t * 0.5) * 0.15;
-        heartGroupRef.current.rotation.z = Math.PI + Math.sin(t * 0.2) * 0.05;
-
-        // Pulse scale
-        const scale = 1.0 + smoothBass * 0.3;
+        heartGroupRef.current.rotation.z = Math.sin(t * 0.2) * 0.05;
+        const scale = 0.8 + smoothBass * 0.3;
         heartGroupRef.current.scale.setScalar(scale);
       }
-
-      // 2. Inner Heart Animation
+      
       if (innerHeartRef.current) {
-        innerHeartRef.current.rotation.y = t * 0.5;
         (innerHeartRef.current.material as MeshBasicMaterial).opacity = 0.3 + smoothBass * 0.7;
       }
-
-      // 3. Light Animation
+      
+      // Orbiting particles animation
+      if (orbitingParticlesRef.current) {
+        orbitingParticlesRef.current.rotation.y = t * 0.8;
+        orbitingParticlesRef.current.rotation.z = Math.sin(t * 0.5) * 0.2;
+      }
+      
       if (lightRef.current) {
         lightRef.current.position.x = Math.sin(t * 0.5) * 60;
         lightRef.current.position.z = Math.cos(t * 0.5) * 60 + 20;
       }
-
-      // 4. Particles
+      
       if (particlesRef.current) {
         particlesRef.current.rotation.y = -t * 0.05;
-        (particlesRef.current.material as PointsMaterial).opacity = 0.2 + smoothTreble * 0.5;
+        (particlesRef.current.material as PointsMaterial).opacity = 0.3 + smoothTreble * 0.5;
       }
 
       composer.render();
@@ -316,19 +366,25 @@ const useThreeVisualizer = ({
 
     return () => {
       pausedRef.current = true;
-      cancelAnimationFrame(rafRef.current!);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
       window.removeEventListener('resize', resize);
+      
       renderer.dispose();
       composer.dispose();
-      geo.dispose();
       innerGeo.dispose();
-      crystalMat.dispose();
       coreMat.dispose();
       pGeo.dispose();
-      containerRef.current?.removeChild(renderer.domElement);
+      orbitGeo.dispose();
+      orbitMat.dispose();
+      
+      if (containerRef.current && renderer.domElement) {
+        containerRef.current.removeChild(renderer.domElement);
+      }
     };
-  }, [containerRef, intensity, isPlaying, connectAudio]);
+    
+  }, [containerRef, intensity]); 
 
+  // Audio Event Listener
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
@@ -336,7 +392,7 @@ const useThreeVisualizer = ({
     return () => a.removeEventListener('play', connectAudio);
   }, [audioRef, connectAudio]);
 
-  return ready;
+  return { ready, isWebGLSupported };
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -352,7 +408,7 @@ const ThreeBackground = ({
   intensity?: number;
 }) => {
   const ref = useRef<HTMLDivElement>(null);
-  const ready = useThreeVisualizer({ audioRef, isPlaying, containerRef: ref, intensity });
+  const { ready, isWebGLSupported } = useThreeVisualizer({ audioRef, isPlaying, containerRef: ref, intensity });
 
   return (
     <div
@@ -360,11 +416,17 @@ const ThreeBackground = ({
       className="absolute inset-0"
       style={{
         pointerEvents: 'none',
-        opacity: ready ? 1 : 0,
+        opacity: ready && isWebGLSupported ? 1 : 0,
         transition: 'opacity 1000ms ease',
         zIndex: 0,
       }}
-    />
+    >
+      {!isWebGLSupported && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black text-white">
+          Your browser does not support WebGL. Try Chrome or Safari.
+        </div>
+      )}
+    </div>
   );
 };
 
