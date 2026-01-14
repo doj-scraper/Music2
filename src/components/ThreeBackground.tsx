@@ -4,74 +4,29 @@ import {
   PerspectiveCamera,
   WebGLRenderer,
   FogExp2,
+  ExtrudeGeometry,
+  MeshPhysicalMaterial,
   Mesh,
+  // Float32Array removed (native JS global)
   BufferGeometry,
   BufferAttribute,
   PointsMaterial,
   Points,
   PointLight,
+  AmbientLight,
   AdditiveBlending,
   Color,
+  Shape,
   Vector2,
-  Vector3, // ✅ ADDED THIS
   MathUtils,
   MeshBasicMaterial,
   SRGBColorSpace,
-  ShaderMaterial,
-  Clock,
-  NoToneMapping,
 } from 'three';
 
 // POST PROCESSING IMPORTS
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-
-// ─────────────────────────────────────────────────────────────
-// SHADERS
-// ─────────────────────────────────────────────────────────────
-
-const obsessionVertexShader = `
-precision mediump float;
-uniform float uTime;
-uniform float uAudioBass;
-uniform vec3 uSourcePosition;
-uniform vec3 uTargetPosition;
-attribute float aPhase;
-attribute vec3 aOffset;
-varying float vDistToTarget;
-
-void main() {
-    vec4 modelPosition = modelMatrix * vec4(position, 1.0);
-    float t = mod(aPhase + uTime * 0.5, 1.0);
-    vec3 curvePos = mix(uSourcePosition, uTargetPosition, t);
-    
-    float angle = t * 10.0 + uTime * 2.0;
-    float spiralX = cos(angle) * 10.0 * (1.0 + uAudioBass);
-    float spiralY = sin(angle) * 5.0 * (1.0 + uAudioBass);
-    
-    modelPosition.xyz = curvePos + vec3(spiralX, spiralY, 0.0) + aOffset;
-    modelPosition.y += sin(uTime * 0.5 + aPhase * 6.28) * 2.0;
-    
-    vec4 viewPosition = viewMatrix * modelPosition;
-    gl_Position = projectionMatrix * viewPosition;
-    vDistToTarget = distance(modelPosition.xyz, uTargetPosition);
-    
-    gl_PointSize = 3.0 * (200.0 / -viewPosition.z);
-}
-`;
-
-const obsessionFragmentShader = `
-precision mediump float;
-uniform vec3 uColor;
-varying float vDistToTarget;
-
-void main() {
-    float strength = 1.0 - distance(gl_PointCoord, vec2(0.5));
-    strength = pow(strength, 3.0);
-    gl_FragColor = vec4(uColor, strength * 0.8);
-}
-`;
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -83,182 +38,321 @@ interface Props {
   intensity?: number;
 }
 
-// ─────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────
-
-const createObsessionParticles = (count: number, sourcePos: [number, number, number], targetPos: [number, number, number]) => {
-  const positions = new Float32Array(count * 3);
-  const phases = new Float32Array(count);
-  const offsets = new Float32Array(count * 3);
-  
-  for (let i = 0; i < count; i++) {
-    const i3 = i * 3;
-    const t = i / count;
-    positions[i3] = sourcePos[0] + (targetPos[0] - sourcePos[0]) * t;
-    positions[i3 + 1] = sourcePos[1] + (targetPos[1] - sourcePos[1]) * t;
-    positions[i3 + 2] = sourcePos[2] + (targetPos[2] - sourcePos[2]) * t;
-    
-    phases[i] = Math.random();
-    offsets[i3] = (Math.random() - 0.5) * 20;
-    offsets[i3 + 1] = (Math.random() - 0.5) * 20;
-    offsets[i3 + 2] = (Math.random() - 0.5) * 20;
-  }
-  
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new BufferAttribute(positions, 3));
-  geometry.setAttribute('aPhase', new BufferAttribute(phases, 1));
-  geometry.setAttribute('aOffset', new BufferAttribute(offsets, 3));
-  
-  const material = new ShaderMaterial({
-    vertexShader: obsessionVertexShader,
-    fragmentShader: obsessionFragmentShader,
-    uniforms: {
-      uTime: { value: 0 },
-      uAudioBass: { value: 0 },
-      uSourcePosition: { value: new Vector3(...sourcePos) }, // ✅ Now works
-      uTargetPosition: { value: new Vector3(...targetPos) }, // ✅ Now works
-      uColor: { value: new Color(0xff1493) },
-    },
-    transparent: true,
-    blending: AdditiveBlending,
-    depthWrite: false,
-    side: 2,
-  });
-  
-  const points = new Points(geometry, material);
-  return { geometry, material, points };
-};
-
-// ─────────────────────────────────────────────────────────────
-// MAIN HOOK
-// ─────────────────────────────────────────────────────────────
-const useObsessionScene = ({ audioRef, isPlaying, containerRef, intensity = 1 }: Props) => {
+const useThreeVisualizer = ({
+  audioRef,
+  isPlaying,
+  containerRef,
+  intensity = 1,
+}: Props) => {
   const sceneRef = useRef<Scene | null>(null);
   const rendererRef = useRef<WebGLRenderer | null>(null);
   const cameraRef = useRef<PerspectiveCamera | null>(null);
   const composerRef = useRef<EffectComposer | null>(null);
-  const clockRef = useRef(new Clock());
+  
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const dataRef = useRef<Uint8Array | null>(null);
   const rafRef = useRef<number | null>(null);
   const pausedRef = useRef(false);
-  
+
+  // Objects
+  const heartGroupRef = useRef<Mesh | null>(null);
+  const innerHeartRef = useRef<Mesh | null>(null);
   const particlesRef = useRef<Points | null>(null);
-  const particlesMatRef = useRef<ShaderMaterial | null>(null);
+  const lightRef = useRef<PointLight | null>(null);
+
+  // Smooth Animation Values
+  const currentBassRef = useRef(0);
+  const currentTrebleRef = useRef(0);
 
   const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
+  // ── AUDIO SETUP ──
+  const connectAudio = useCallback(async () => {
+    if (!audioRef.current || analyserRef.current) return;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    const src = ctx.createMediaElementSource(audioRef.current);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.8;
+
+    src.connect(analyser);
+    analyser.connect(ctx.destination);
+
+    analyserRef.current = analyser;
+    dataRef.current = new Uint8Array(analyser.frequencyBinCount);
+  }, [audioRef]);
+
+  // ─────────────────────────────────────────────────────────────
+  // SCENE INIT
+  // ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return;
+
+    // 1. Setup Scene
+    const scene = new Scene();
+    scene.fog = new FogExp2(0x020202, 0.002);
+    sceneRef.current = scene;
+
+    const camera = new PerspectiveCamera(60, 1, 1, 1000);
+    camera.position.z = 110;
+    cameraRef.current = camera;
+
+    // 2. Renderer Tuning
+    const renderer = new WebGLRenderer({
+      alpha: true,
+      antialias: false, 
+      powerPreference: 'high-performance',
+      stencil: false,
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x000000, 0);
+    renderer.setClearAlpha(0);
     
-    try {
-      const { width, height } = containerRef.current.getBoundingClientRect();
-      if (width === 0 || height === 0) return;
+    // Color Space
+    renderer.outputColorSpace = SRGBColorSpace; 
 
-      const scene = new Scene();
-      scene.fog = new FogExp2(0x050508, 0.008);
-      sceneRef.current = scene;
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.inset = '0';
+    containerRef.current.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
 
-      const camera = new PerspectiveCamera(60, width / height, 0.1, 1000);
-      camera.position.set(0, 0, 70);
-      cameraRef.current = camera;
+    // ───────────────── POST PROCESSING (TUNED BLOOM) ─────────────────
+    const renderScene = new RenderPass(scene, camera);
+    
+    const bloomPass = new UnrealBloomPass(
+      new Vector2(window.innerWidth, window.innerHeight),
+      1.4,   // Strength
+      0.32,  // Radius
+      0.12   // Threshold
+    );
 
-      const renderer = new WebGLRenderer({
-        alpha: true,
-        antialias: true,
-        powerPreference: 'high-performance',
-      });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-      renderer.setSize(width, height, false);
-      renderer.setClearColor(0x050508, 0);
-      renderer.toneMapping = NoToneMapping;
-      renderer.outputColorSpace = SRGBColorSpace;
-      renderer.domElement.style.position = 'absolute';
-      renderer.domElement.style.inset = '0';
-      containerRef.current.appendChild(renderer.domElement);
-      rendererRef.current = renderer;
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+    composerRef.current = composer;
 
-      // Post-processing
-      const renderScene = new RenderPass(scene, camera);
-      const bloomPass = new UnrealBloomPass(new Vector2(width, height), 1.8, 0.4, 0.15);
-      const composer = new EffectComposer(renderer);
-      composer.setSize(width, height);
-      composer.addPass(renderScene);
-      composer.addPass(bloomPass);
-      composerRef.current = composer;
+    // ───────────────── GEOMETRY CREATION ─────────────────
+    const shape = new Shape();
+    const x = 0, y = 0;
+    shape.moveTo(x + 5, y + 5);
+    shape.bezierCurveTo(x + 5, y + 5, x + 4, y, x, y);
+    shape.bezierCurveTo(x - 6, y, x - 6, y + 7, x - 6, y + 7);
+    shape.bezierCurveTo(x - 6, y + 11, x - 3, y + 15.4, x + 5, y + 19);
+    shape.bezierCurveTo(x + 12, y + 15.4, x + 16, y + 11, x + 16, y + 7);
+    shape.bezierCurveTo(x + 16, y + 7, x + 16, y, x + 10, y);
+    shape.bezierCurveTo(x + 7, y, x + 5, y + 5, x + 5, y + 5);
 
-      // Scene objects
-      const { points, material } = createObsessionParticles(500, [-20, 0, 0], [20, 0, 0]);
-      scene.add(points);
-      particlesRef.current = points;
-      particlesMatRef.current = material;
+    // Outer Geometry (The Ruby) - OPTIMIZED
+    const geo = new ExtrudeGeometry(shape, {
+      depth: 6,
+      bevelEnabled: true,
+      bevelThickness: 1,
+      bevelSize: 1,
+      bevelSegments: 8,
+    });
+    geo.center();
 
-      const keyLight = new PointLight(0xff1493, 2, 200);
-      keyLight.position.set(-30, 10, 30);
-      scene.add(keyLight);
+    // Inner Geometry (The Core) - OPTIMIZED
+    const innerGeo = new ExtrudeGeometry(shape, {
+      depth: 3,
+      bevelEnabled: true,
+      bevelThickness: 0.5,
+      bevelSize: 0.5,
+      bevelSegments: 3,
+    });
+    innerGeo.center();
 
-      // Resize
-      const handleResize = () => {
-        if (!containerRef.current || !rendererRef.current || !cameraRef.current || !composerRef.current) return;
-        const { width, height } = containerRef.current.getBoundingClientRect();
-        camera.aspect = width / height;
-        camera.updateProjectionMatrix();
-        renderer.setSize(width, height, false);
-        composer.setSize(width, height);
-      };
-      handleResize();
-      window.addEventListener('resize', handleResize);
+    // ───────────────── MATERIALS ─────────────────
+    
+    // MATERIAL 1: The "Ruby" Outer Shell
+    const crystalMat = new MeshPhysicalMaterial({
+      color: 0xff002b,
+      emissive: 0x500000,
+      roughness: 0.1,
+      metalness: 0.1,
+      transmission: 0.9,
+      thickness: 8.0,
+      ior: 1.76,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.0,
+      attenuationColor: new Color(0x8a0b1f),
+      attenuationDistance: 20,
+    });
 
-      // Animation
-      const animate = () => {
-        if (pausedRef.current) return;
-        rafRef.current = requestAnimationFrame(animate);
+    // MATERIAL 2: The "Energy" Inner Core
+    const coreMat = new MeshBasicMaterial({
+      color: 0xff88aa,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.5,
+      blending: AdditiveBlending
+    });
 
-        const elapsedTime = clockRef.current.getElapsedTime();
-        
-        if (particlesMatRef.current) {
-          particlesMatRef.current.uniforms.uTime.value = elapsedTime;
-          // Note: uAudioBass is 0 here as audio logic was stripped. 
-          // If you want reactivity, you need to add the AnalyserNode logic back.
-        }
-        if (particlesRef.current) {
-          particlesRef.current.rotation.y = elapsedTime * 0.02;
-        }
+    // ───────────────── MESHES ─────────────────
+    const heart = new Mesh(geo, crystalMat);
+    heart.rotation.z = Math.PI;
+    heart.position.y = -35;
+    scene.add(heart);
+    heartGroupRef.current = heart;
 
-        composer.render();
-        setReady(true);
-      };
-      animate();
+    const innerHeart = new Mesh(innerGeo, coreMat);
+    innerHeart.rotation.z = Math.PI;
+    innerHeart.position.z = 0;
+    innerHeart.scale.setScalar(0.7);
+    heart.add(innerHeart);
+    innerHeartRef.current = innerHeart;
 
-      return () => {
-        pausedRef.current = true;
-        if (rafRef.current) cancelAnimationFrame(rafRef.current);
-        window.removeEventListener('resize', handleResize);
-        particlesRef.current?.geometry.dispose();
-        particlesMatRef.current?.dispose();
-        composer.dispose();
-        renderer.dispose();
-        if (containerRef.current && renderer.domElement) {
-          containerRef.current.removeChild(renderer.domElement);
-        }
-      };
-    } catch (err) {
-      console.error('Scene init failed:', err);
-      setError('Initialization failed');
+    // ───────────────── PARTICLES (OPTIMIZED) ─────────────────
+    const count = 1000;
+    // Float32Array is used here natively
+    const positions = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const i3 = i * 3;
+      positions[i3] = (Math.random() - 0.5) * 300;
+      positions[i3 + 1] = (Math.random() - 0.5) * 200;
+      positions[i3 + 2] = (Math.random() - 0.5) * 200;
     }
-  }, [containerRef, intensity]);
+    const pGeo = new BufferGeometry();
+    pGeo.setAttribute('position', new BufferAttribute(positions, 3));
+    const pMat = new PointsMaterial({
+      color: 0xff4d6d,
+      size: 0.75,
+      transparent: true,
+      opacity: 0.6,
+      blending: AdditiveBlending,
+      sizeAttenuation: true,
+    });
+    const particles = new Points(pGeo, pMat);
+    scene.add(particles);
+    particlesRef.current = particles;
 
-  return { ready, error };
+    // ───────────────── LIGHTING ─────────────────
+    const key = new PointLight(0xff0f3b, 1.5, 300);
+    key.position.set(30, 20, 50);
+    scene.add(key);
+    lightRef.current = key;
+
+    const rim = new PointLight(0x4444ff, 2.0, 300);
+    rim.position.set(-50, 50, -20);
+    scene.add(rim);
+
+    const fill = new PointLight(0xaa00ff, 0.5, 300);
+    fill.position.set(0, -50, 20);
+    scene.add(fill);
+
+    // ───────────────── RESIZE ─────────────────
+    const resize = () => {
+      if (!containerRef.current || !rendererRef.current || !cameraRef.current) return;
+      const { width, height } = containerRef.current.getBoundingClientRect();
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+      composer.setSize(width, height);
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    // ───────────────── ANIMATE ─────────────────
+    const animate = () => {
+      if (pausedRef.current) return;
+      rafRef.current = requestAnimationFrame(animate);
+
+      const t = performance.now() * 0.001;
+      
+      let rawBass = 0;
+      let rawTreble = 0;
+
+      if (isPlaying && analyserRef.current && dataRef.current) {
+        analyserRef.current.getByteFrequencyData(dataRef.current);
+        rawBass = dataRef.current.slice(0, 10).reduce((a, b) => a + b, 0) / (10 * 255);
+        rawTreble = dataRef.current.slice(40, 100).reduce((a, b) => a + b, 0) / (60 * 255);
+      }
+
+      // Smooth Lerping
+      currentBassRef.current = MathUtils.lerp(currentBassRef.current, rawBass, 0.1);
+      currentTrebleRef.current = MathUtils.lerp(currentTrebleRef.current, rawTreble, 0.05);
+
+      const smoothBass = currentBassRef.current;
+      const smoothTreble = currentTrebleRef.current;
+
+      // 1. Heart Animation
+      if (heartGroupRef.current) {
+        heartGroupRef.current.rotation.y = Math.sin(t * 0.5) * 0.15;
+        heartGroupRef.current.rotation.z = Math.PI + Math.sin(t * 0.2) * 0.05;
+
+        // Pulse scale
+        const scale = 1.0 + smoothBass * 0.3;
+        heartGroupRef.current.scale.setScalar(scale);
+      }
+
+      // 2. Inner Heart Animation
+      if (innerHeartRef.current) {
+        innerHeartRef.current.rotation.y = t * 0.5;
+        (innerHeartRef.current.material as MeshBasicMaterial).opacity = 0.3 + smoothBass * 0.7;
+      }
+
+      // 3. Light Animation
+      if (lightRef.current) {
+        lightRef.current.position.x = Math.sin(t * 0.5) * 60;
+        lightRef.current.position.z = Math.cos(t * 0.5) * 60 + 20;
+      }
+
+      // 4. Particles
+      if (particlesRef.current) {
+        particlesRef.current.rotation.y = -t * 0.05;
+        (particlesRef.current.material as PointsMaterial).opacity = 0.2 + smoothTreble * 0.5;
+      }
+
+      composer.render();
+    };
+
+    animate();
+    setReady(true);
+
+    return () => {
+      pausedRef.current = true;
+      cancelAnimationFrame(rafRef.current!);
+      window.removeEventListener('resize', resize);
+      renderer.dispose();
+      composer.dispose();
+      geo.dispose();
+      innerGeo.dispose();
+      crystalMat.dispose();
+      coreMat.dispose();
+      pGeo.dispose();
+      containerRef.current?.removeChild(renderer.domElement);
+    };
+  }, [containerRef, intensity, isPlaying, connectAudio]);
+
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.addEventListener('play', connectAudio);
+    return () => a.removeEventListener('play', connectAudio);
+  }, [audioRef, connectAudio]);
+
+  return ready;
 };
 
-const ThreeBackground = ({ audioRef, isPlaying, intensity = 1 }: Props) => {
+// ─────────────────────────────────────────────────────────────
+// COMPONENT
+// ─────────────────────────────────────────────────────────────
+const ThreeBackground = ({
+  audioRef,
+  isPlaying,
+  intensity = 1,
+}: {
+  audioRef: React.RefObject<HTMLAudioElement>;
+  isPlaying: boolean;
+  intensity?: number;
+}) => {
   const ref = useRef<HTMLDivElement>(null);
-  const { ready, error } = useObsessionScene({
-    audioRef,
-    isPlaying,
-    containerRef: ref,
-    intensity,
-  });
+  const ready = useThreeVisualizer({ audioRef, isPlaying, containerRef: ref, intensity });
 
   return (
     <div
@@ -270,13 +364,7 @@ const ThreeBackground = ({ audioRef, isPlaying, intensity = 1 }: Props) => {
         transition: 'opacity 1000ms ease',
         zIndex: 0,
       }}
-    >
-      {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black text-red-400 text-sm p-4">
-          {error}
-        </div>
-      )}
-    </div>
+    />
   );
 };
 
